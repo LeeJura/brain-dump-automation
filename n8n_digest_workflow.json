@@ -1,5 +1,5 @@
 {
-  "name": "Second Brain - Digest & Weekly Review (V2.2)",
+  "name": "Second Brain - Digest & Weekly Review (V2.3)",
   "nodes": [
     {
       "parameters": {
@@ -25,26 +25,26 @@
         "rules": {
           "rules": [
             {
-              "outputKey": "Sunday",
+              "outputKey": "Weekly Review Day",
               "conditions": {
                 "options": { "caseSensitive": true, "leftValue": "" },
                 "conditions": [
                   {
                     "leftValue": "={{ new Date().getDay() }}",
-                    "rightValue": "0",
+                    "rightValue": "={{ $env.WEEKLY_REVIEW_DAY || 0 }}",
                     "operator": { "type": "number", "operation": "equals" }
                   }
                 ]
               }
             },
             {
-              "outputKey": "Weekday",
+              "outputKey": "Regular Day",
               "conditions": {
                 "options": { "caseSensitive": true, "leftValue": "" },
                 "conditions": [
                   {
                     "leftValue": "={{ new Date().getDay() }}",
-                    "rightValue": "0",
+                    "rightValue": "={{ $env.WEEKLY_REVIEW_DAY || 0 }}",
                     "operator": { "type": "number", "operation": "notEquals" }
                   }
                 ]
@@ -173,7 +173,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Merge and format daily items for Claude\nconst tasks = $('Fetch Tasks (Yesterday)').all() || [];\nconst inbox = $('Fetch Inbox (Yesterday)').all() || [];\n\n// Check if we have any items\nconst totalItems = tasks.length + inbox.length;\n\nif (totalItems === 0) {\n  return [{ json: { isEmpty: true, message: 'No new items from yesterday.' } }];\n}\n\n// Format items for readability\nconst formatItem = (item) => {\n  const props = item.json.properties || {};\n  const title = props.Title?.title?.[0]?.text?.content || props.Name?.title?.[0]?.text?.content || 'Untitled';\n  const summary = props.Summary?.rich_text?.[0]?.text?.content || '';\n  const status = props.Status?.select?.name || '';\n  return `- ${title}${status ? ` [${status}]` : ''}${summary ? `: ${summary}` : ''}`;\n};\n\nlet content = '';\n\nif (tasks.length > 0) {\n  content += `TASKS (${tasks.length}):\\n`;\n  content += tasks.map(formatItem).join('\\n');\n  content += '\\n\\n';\n}\n\nif (inbox.length > 0) {\n  content += `INBOX ITEMS (${inbox.length}):\\n`;\n  content += inbox.map(formatItem).join('\\n');\n}\n\nreturn [{ json: { isEmpty: false, formattedContent: content, taskCount: tasks.length, inboxCount: inbox.length } }];"
+        "jsCode": "// Merge and format daily items for Claude\n// Filter out completed/archived items\nconst allTasks = $('Fetch Tasks (Yesterday)').all() || [];\nconst allInbox = $('Fetch Inbox (Yesterday)').all() || [];\n\n// Filter out completed items (Status = 'Done' or 'Archived')\nconst tasks = allTasks.filter(item => {\n  const status = item.json.properties?.Status?.select?.name || '';\n  return status !== 'Done' && status !== 'Archived' && status !== 'Completed';\n});\n\nconst inbox = allInbox.filter(item => {\n  const status = item.json.properties?.Status?.select?.name || '';\n  return status !== 'Done' && status !== 'Archived' && status !== 'Completed';\n});\n\n// Check if we have any items\nconst totalItems = tasks.length + inbox.length;\n\nif (totalItems === 0) {\n  return [{ json: { isEmpty: true, message: 'No new items from yesterday.' } }];\n}\n\n// Format items for readability\nconst formatItem = (item) => {\n  const props = item.json.properties || {};\n  const title = props.Title?.title?.[0]?.text?.content || props.Name?.title?.[0]?.text?.content || 'Untitled';\n  const summary = props.Summary?.rich_text?.[0]?.text?.content || '';\n  const status = props.Status?.select?.name || '';\n  return `- ${title}${status ? ` [${status}]` : ''}${summary ? `: ${summary}` : ''}`;\n};\n\nlet content = '';\n\nif (tasks.length > 0) {\n  content += `TASKS (${tasks.length}):\\n`;\n  content += tasks.map(formatItem).join('\\n');\n  content += '\\n\\n';\n}\n\nif (inbox.length > 0) {\n  content += `INBOX ITEMS (${inbox.length}):\\n`;\n  content += inbox.map(formatItem).join('\\n');\n}\n\nreturn [{ json: { isEmpty: false, formattedContent: content, taskCount: tasks.length, inboxCount: inbox.length } }];"
       },
       "name": "Format Daily Items",
       "type": "n8n-nodes-base.code",

@@ -1,5 +1,5 @@
 {
-  "name": "Second Brain V2.2 (Production Ready)",
+  "name": "Second Brain V2.3 (Full Featured)",
   "nodes": [
     {
       "parameters": {
@@ -14,7 +14,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Input Validation\nconst input = $input.first().json;\n\n// Check for required fields\nif (!input.text || input.text.trim() === '') {\n  throw new Error('Empty message received - skipping');\n}\n\n// Skip bot messages\nif (input.bot_id || input.subtype === 'bot_message') {\n  throw new Error('Bot message received - skipping');\n}\n\n// Check message length (warn if too long for Claude)\nconst MAX_LENGTH = 4000;\nlet text = input.text;\nif (text.length > MAX_LENGTH) {\n  text = text.substring(0, MAX_LENGTH) + '... [truncated]';\n}\n\nreturn [{\n  json: {\n    ...input,\n    text: text,\n    validated: true\n  }\n}];"
+        "jsCode": "// Input Validation + File Detection + Thread Capture Check\nconst input = $input.first().json;\n\n// Check for /capture-thread command\nconst isCaptureThread = input.text && input.text.trim().toLowerCase().startsWith('/capture-thread');\n\n// Check for required fields (allow empty text if files present)\nconst hasText = input.text && input.text.trim() !== '';\nconst hasFiles = input.files && input.files.length > 0;\n\nif (!hasText && !hasFiles) {\n  throw new Error('Empty message received - skipping');\n}\n\n// Skip bot messages\nif (input.bot_id || input.subtype === 'bot_message') {\n  throw new Error('Bot message received - skipping');\n}\n\n// Check message length (truncate if too long)\nconst MAX_LENGTH = 4000;\nlet text = input.text || '';\nif (text.length > MAX_LENGTH) {\n  text = text.substring(0, MAX_LENGTH) + '... [truncated]';\n}\n\n// Generate hash for duplicate detection\nconst crypto = require('crypto');\nconst messageHash = crypto.createHash('md5').update(text + (input.files ? JSON.stringify(input.files) : '')).digest('hex');\n\nreturn [{\n  json: {\n    ...input,\n    text: text,\n    hasFiles: hasFiles,\n    files: input.files || [],\n    isCaptureThread: isCaptureThread,\n    messageHash: messageHash,\n    validated: true\n  }\n}];"
       },
       "name": "Validate Input",
       "type": "n8n-nodes-base.code",
@@ -23,18 +23,47 @@
     },
     {
       "parameters": {
-        "resource": "message",
-        "operation": "getReplies",
-        "channelId": "={{$json.channel_id}}",
-        "ts": "={{$json.thread_ts || $json.ts}}",
-        "limit": 10
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.hasFiles }}",
+              "rightValue": "true",
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ]
+        }
       },
-      "name": "Get Thread Context",
-      "type": "n8n-nodes-base.slack",
-      "typeVersion": 1,
-      "position": [500, 300],
+      "name": "Has Files?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process files for Vision API\nconst input = $input.first().json;\nconst files = input.files || [];\n\nlet fileDescriptions = [];\n\nfor (const file of files) {\n  const isImage = file.mimetype && file.mimetype.startsWith('image/');\n  const isPdf = file.mimetype === 'application/pdf';\n  \n  if (isImage || isPdf) {\n    fileDescriptions.push({\n      type: isImage ? 'image' : 'pdf',\n      name: file.name,\n      url: file.url_private,\n      mimetype: file.mimetype\n    });\n  }\n}\n\nreturn [{\n  json: {\n    ...input,\n    fileDescriptions: fileDescriptions,\n    hasVisionContent: fileDescriptions.length > 0\n  }\n}];"
+      },
+      "name": "Process Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.fileDescriptions[0]?.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackOAuth2Api",
+        "options": {
+          "response": { "response": { "responseFormat": "file" } }
+        }
+      },
+      "name": "Download File",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 200],
       "credentials": {
-        "slackApi": {
+        "slackOAuth2Api": {
           "id": "YOUR_SLACK_CREDENTIAL_ID",
           "name": "Slack account"
         }
@@ -42,12 +71,105 @@
     },
     {
       "parameters": {
-        "jsCode": "// Format thread context for Claude readability\nconst messages = $input.first().json.messages || [];\nconst currentMessage = $('Validate Input').first().json.text;\n\nlet formattedContext = '';\n\nif (messages.length > 1) {\n  formattedContext = 'CONVERSATION CONTEXT (previous messages):\\n';\n  messages.slice(0, -1).forEach((msg, i) => {\n    const text = msg.text || '[no text]';\n    formattedContext += `${i + 1}. ${text}\\n`;\n  });\n  formattedContext += '\\n---\\n\\n';\n}\n\nformattedContext += `CURRENT MESSAGE TO PROCESS:\\n${currentMessage}`;\n\nreturn [{\n  json: {\n    formattedContext,\n    originalMessage: currentMessage,\n    channel_id: $('Validate Input').first().json.channel_id,\n    ts: $('Validate Input').first().json.ts\n  }\n}];"
+        "jsCode": "// Encode file as base64 for Claude Vision\nconst binaryData = $input.first().binary?.data;\nconst previousData = $('Process Files').first().json;\n\nlet imageContent = null;\n\nif (binaryData) {\n  const base64 = Buffer.from(binaryData.data, 'base64').toString('base64');\n  const mediaType = previousData.fileDescriptions[0]?.mimetype || 'image/png';\n  \n  imageContent = {\n    type: 'image',\n    source: {\n      type: 'base64',\n      media_type: mediaType,\n      data: base64\n    }\n  };\n}\n\nreturn [{\n  json: {\n    ...previousData,\n    imageContent: imageContent,\n    text: previousData.text || `[Uploaded file: ${previousData.fileDescriptions[0]?.name}]`\n  }\n}];"
       },
-      "name": "Format Context",
+      "name": "Encode for Vision",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [700, 300]
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge file path back to main flow (no files)\nconst input = $input.first().json;\nreturn [{\n  json: {\n    ...input,\n    imageContent: null,\n    hasVisionContent: false\n  }\n}];"
+      },
+      "name": "No Files Path",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge both paths\nconst items = $input.all();\nreturn items;"
+      },
+      "name": "Merge Paths",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "getAll",
+        "databaseId": "={{ $env.NOTION_DB_INBOX }}",
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "key": "Hash",
+              "condition": "equals",
+              "value": "={{ $json.messageHash }}"
+            }
+          ]
+        },
+        "returnAll": false,
+        "limit": 1
+      },
+      "name": "Check Duplicate",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [1500, 300],
+      "credentials": {
+        "notionApi": {
+          "id": "YOUR_NOTION_CREDENTIAL_ID",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check if duplicate was found\nconst notionResults = $input.first().json;\nconst previousData = $('Merge Paths').first().json;\n\n// If we found a matching hash in Notion, it's a duplicate\nconst isDuplicate = notionResults && notionResults.id;\n\nreturn [{\n  json: {\n    ...previousData,\n    isDuplicate: isDuplicate,\n    duplicatePageId: isDuplicate ? notionResults.id : null\n  }\n}];"
+      },
+      "name": "Evaluate Duplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1700, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.isDuplicate }}",
+              "rightValue": "true",
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ]
+        }
+      },
+      "name": "Is Duplicate?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1900, 300]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $json.channel_id }}",
+        "text": "=⚠️ *Duplicate Detected*\nThis message appears to be a duplicate of a recently saved item.\n_Skipping to avoid clutter._",
+        "otherOptions": {
+          "thread_ts": "={{ $json.ts }}"
+        }
+      },
+      "name": "Notify Duplicate",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [2100, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
     },
     {
       "parameters": {
@@ -58,24 +180,18 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {
-              "name": "anthropic-version",
-              "value": "2023-06-01"
-            },
-            {
-              "name": "content-type",
-              "value": "application/json"
-            }
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"model\": \"claude-3-5-sonnet-20241022\",\n  \"max_tokens\": 1000,\n  \"system\": \"You are an expert Personal Knowledge Management assistant. Your goal is to organize the user's raw thoughts into a structured Second Brain system.\\n\\n### OUTPUT\\nYou must return ONLY a JSON object with no markdown formatting. The JSON must adhere to this schema:\\n\\n{\\n  \\\"category\\\": \\\"Project\\\" | \\\"Area\\\" | \\\"Resource\\\" | \\\"Archive\\\" | \\\"Inbox\\\",\\n  \\\"subcategory\\\": \\\"People\\\" | \\\"Ideas\\\" | \\\"Tasks\\\" | \\\"Content\\\" | null,\\n  \\\"title\\\": \\\"A short, punchy summary (max 5-7 words)\\\",\\n  \\\"summary\\\": \\\"A 1-2 sentence description of the content\\\",\\n  \\\"action_items\\\": [\\\"List of strings\\\", \\\"Extract any tasks here\\\"],\\n  \\\"projects_mentioned\\\": [\\\"List of project names if evident\\\"],\\n  \\\"people_mentioned\\\": [\\\"List of names if evident\\\"],\\n  \\\"confidence_score\\\": 0.0 to 1.0,\\n  \\\"reasoning\\\": \\\"Brief explanation of why you chose this category\\\"\\n}\\n\\n### CATEGORY RULES\\n- **Project**: A series of tasks linked to a goal, with a deadline\\n- **Area**: Ongoing responsibilities with no end date (Health, Finances)\\n- **Resource**: Topics of ongoing interest (Notes on AI, Recipes)\\n- **Archive**: Inactive items\\n- **Inbox**: Anything uncertain (set confidence_score < 0.7)\\n\\n### SUBCATEGORY RULES\\n- **People**: Information about a person (Met John, he likes coffee)\\n- **Tasks**: Explicit to-dos (Buy milk)\\n\\n### IMPORTANT\\n1. If input is vague, set category to Inbox and confidence_score to 0.5\\n2. Extract inherent tasks into action_items even if not explicit\\n3. Return ONLY valid JSON, no markdown code blocks\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"{{$json.formattedContext}}\"\n    }\n  ]\n}"
+        "jsonBody": "={\n  \"model\": \"claude-3-haiku-20240307\",\n  \"max_tokens\": 10,\n  \"system\": \"You are a filter that determines if a message is worth saving to a knowledge base. Answer ONLY 'YES' or 'NO'.\\n\\nSay NO to: greetings (hi, hello, thanks), single words, emojis only, test messages, spam, acknowledgments (ok, got it, sure).\\nSay YES to: tasks, ideas, meeting notes, people info, project updates, anything with substance.\",\n  \"messages\": [{ \"role\": \"user\", \"content\": \"Is this worth saving? Message: {{$json.text}}\" }]\n}"
       },
-      "name": "Claude 3.5 Sonnet",
+      "name": "Cheap Bouncer (Haiku)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
-      "position": [900, 300],
+      "position": [2100, 400],
       "credentials": {
         "httpHeaderAuth": {
           "id": "YOUR_CLAUDE_CREDENTIAL_ID",
@@ -85,12 +201,114 @@
     },
     {
       "parameters": {
-        "jsCode": "// Parse Claude response and add routing info\nconst response = $input.first().json;\nconst content = response.content[0].text;\n\n// Try to parse JSON from Claude response\nlet parsed;\ntry {\n  // Handle case where Claude wraps in code blocks\n  let cleanContent = content.trim();\n  if (cleanContent.startsWith('```')) {\n    cleanContent = cleanContent.replace(/^```json?\\n?/, '').replace(/\\n?```$/, '');\n  }\n  parsed = JSON.parse(cleanContent);\n} catch (e) {\n  throw new Error(`Failed to parse Claude response: ${e.message}. Raw: ${content}`);\n}\n\n// Validate required fields\nif (!parsed.category || !parsed.title) {\n  throw new Error('Claude response missing required fields: category or title');\n}\n\n// Determine routing based on confidence score first\nlet routeTo;\nif (parsed.confidence_score < 0.7) {\n  routeTo = 'Inbox';\n} else if (parsed.subcategory === 'People') {\n  routeTo = 'People';\n} else if (parsed.subcategory === 'Tasks' || parsed.category === 'Project') {\n  routeTo = 'Task';\n} else if (parsed.category === 'Resource') {\n  routeTo = 'Resource';\n} else {\n  routeTo = 'Inbox';\n}\n\nreturn [{\n  json: {\n    ...parsed,\n    routeTo,\n    channel_id: $('Format Context').first().json.channel_id,\n    ts: $('Format Context').first().json.ts,\n    originalMessage: $('Format Context').first().json.originalMessage\n  }\n}];"
+        "jsCode": "// Check bouncer response\nconst response = $input.first().json;\nconst previousData = $('Evaluate Duplicate').first().json;\n\nconst answer = response.content[0].text.trim().toUpperCase();\nconst isWorthSaving = answer.startsWith('YES');\n\nreturn [{\n  json: {\n    ...previousData,\n    isWorthSaving: isWorthSaving,\n    bouncerResponse: answer\n  }\n}];"
+      },
+      "name": "Evaluate Bouncer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2300, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.isWorthSaving }}",
+              "rightValue": "true",
+              "operator": { "type": "boolean", "operation": "true" }
+            }
+          ]
+        }
+      },
+      "name": "Worth Saving?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2500, 400]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $json.channel_id }}",
+        "text": "=💨 *Filtered*: Message doesn't appear to contain actionable content.\n_React with ✅ to force save anyway._",
+        "otherOptions": {
+          "thread_ts": "={{ $json.ts }}"
+        }
+      },
+      "name": "Notify Filtered",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [2700, 500],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "getReplies",
+        "channelId": "={{ $json.channel_id }}",
+        "ts": "={{ $json.thread_ts || $json.ts }}",
+        "limit": "={{ $env.THREAD_CONTEXT_LIMIT || 10 }}"
+      },
+      "name": "Get Thread Context",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [2700, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format thread context for Claude readability\nconst messages = $input.first().json.messages || [];\nconst previousData = $('Evaluate Bouncer').first().json;\nconst currentMessage = previousData.text;\nconst isCaptureThread = previousData.isCaptureThread;\n\nlet formattedContext = '';\n\n// If /capture-thread, include ALL messages as content\nif (isCaptureThread && messages.length > 0) {\n  formattedContext = 'FULL THREAD TO SUMMARIZE:\\n';\n  messages.forEach((msg, i) => {\n    const text = msg.text || '[no text]';\n    formattedContext += `${i + 1}. ${text}\\n`;\n  });\n  formattedContext += '\\n---\\n\\nPlease summarize this entire thread as a single knowledge item.';\n} else if (messages.length > 1) {\n  formattedContext = 'CONVERSATION CONTEXT (previous messages):\\n';\n  messages.slice(0, -1).forEach((msg, i) => {\n    const text = msg.text || '[no text]';\n    formattedContext += `${i + 1}. ${text}\\n`;\n  });\n  formattedContext += '\\n---\\n\\n';\n  formattedContext += `CURRENT MESSAGE TO PROCESS:\\n${currentMessage}`;\n} else {\n  formattedContext = `CURRENT MESSAGE TO PROCESS:\\n${currentMessage}`;\n}\n\n// Add image description if present\nif (previousData.hasVisionContent) {\n  formattedContext += '\\n\\n[Note: An image was attached. Describe what you see and include relevant details in the summary.]';\n}\n\nreturn [{\n  json: {\n    ...previousData,\n    formattedContext,\n    originalMessage: currentMessage,\n    channel_id: previousData.channel_id,\n    ts: previousData.ts\n  }\n}];"
+      },
+      "name": "Format Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2900, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-3-5-sonnet-20241022\",\n  \"max_tokens\": 1000,\n  \"system\": \"You are an expert Personal Knowledge Management assistant. Your goal is to organize the user's raw thoughts into a structured Second Brain system.\\n\\n### OUTPUT\\nYou must return ONLY a JSON object with no markdown formatting. The JSON must adhere to this schema:\\n\\n{\\n  \\\"category\\\": \\\"Project\\\" | \\\"Area\\\" | \\\"Resource\\\" | \\\"Archive\\\" | \\\"Inbox\\\",\\n  \\\"subcategory\\\": \\\"People\\\" | \\\"Ideas\\\" | \\\"Tasks\\\" | \\\"Content\\\" | null,\\n  \\\"title\\\": \\\"A short, punchy summary (max 5-7 words)\\\",\\n  \\\"summary\\\": \\\"A 1-2 sentence description of the content\\\",\\n  \\\"action_items\\\": [\\\"List of strings\\\", \\\"Extract any tasks here\\\"],\\n  \\\"projects_mentioned\\\": [\\\"List of project names if evident\\\"],\\n  \\\"people_mentioned\\\": [\\\"List of FULL NAMES only - do not include nicknames, roles, or pronouns\\\"],\\n  \\\"confidence_score\\\": 0.0 to 1.0,\\n  \\\"reasoning\\\": \\\"Brief explanation of why you chose this category\\\"\\n}\\n\\n### CATEGORY RULES\\n- **Project**: A series of tasks linked to a goal, with a deadline\\n- **Area**: Ongoing responsibilities with no end date (Health, Finances)\\n- **Resource**: Topics of ongoing interest (Notes on AI, Recipes)\\n- **Archive**: Inactive items\\n- **Inbox**: Anything uncertain (set confidence_score < 0.7)\\n\\n### SUBCATEGORY RULES\\n- **People**: Information specifically about a person (Met John Smith, he likes coffee)\\n- **Tasks**: Explicit to-dos (Buy milk)\\n\\n### PEOPLE EXTRACTION RULES\\n1. Only add FULL NAMES to people_mentioned (e.g., \\\"Sarah Johnson\\\", \\\"Mike Chen\\\")\\n2. Do NOT add roles (\\\"the engineer\\\"), nicknames, or pronouns\\n3. If only a first name is mentioned, include it but set confidence lower\\n4. Mention roles/nicknames in the summary instead\\n\\n### IMPORTANT\\n1. If input is vague, set category to Inbox and confidence_score to 0.5\\n2. Extract inherent tasks into action_items even if not explicit\\n3. Return ONLY valid JSON, no markdown code blocks\\n4. For images/files, describe what you see and categorize accordingly\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": {{ $json.imageContent ? JSON.stringify([{ type: 'image', source: $json.imageContent.source }, { type: 'text', text: $json.formattedContext }]) : JSON.stringify($json.formattedContext) }}\n    }\n  ]\n}"
+      },
+      "name": "Claude 3.5 Sonnet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [3100, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_CLAUDE_CREDENTIAL_ID",
+          "name": "Claude API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Claude response and add routing info\nconst response = $input.first().json;\nconst previousData = $('Format Context').first().json;\nconst content = response.content[0].text;\n\n// Get configurable confidence threshold\nconst confidenceThreshold = parseFloat('{{ $env.CONFIDENCE_THRESHOLD }}') || 0.7;\n\n// Try to parse JSON from Claude response\nlet parsed;\ntry {\n  let cleanContent = content.trim();\n  if (cleanContent.startsWith('```')) {\n    cleanContent = cleanContent.replace(/^```json?\\n?/, '').replace(/\\n?```$/, '');\n  }\n  parsed = JSON.parse(cleanContent);\n} catch (e) {\n  throw new Error(`Failed to parse Claude response: ${e.message}. Raw: ${content}`);\n}\n\n// Validate required fields\nif (!parsed.category || !parsed.title) {\n  throw new Error('Claude response missing required fields: category or title');\n}\n\n// Determine routing based on confidence score first\nlet routeTo;\nif (parsed.confidence_score < confidenceThreshold) {\n  routeTo = 'Inbox';\n} else if (parsed.subcategory === 'People') {\n  routeTo = 'People';\n} else if (parsed.subcategory === 'Tasks' || parsed.category === 'Project') {\n  routeTo = 'Task';\n} else if (parsed.category === 'Resource') {\n  routeTo = 'Resource';\n} else {\n  routeTo = 'Inbox';\n}\n\nreturn [{\n  json: {\n    ...parsed,\n    routeTo,\n    messageHash: previousData.messageHash,\n    channel_id: previousData.channel_id,\n    ts: previousData.ts,\n    originalMessage: previousData.originalMessage\n  }\n}];"
       },
       "name": "Parse & Route",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1100, 300]
+      "position": [3300, 300]
     },
     {
       "parameters": {
@@ -102,7 +320,7 @@
                 "options": { "caseSensitive": true, "leftValue": "" },
                 "conditions": [
                   {
-                    "leftValue": "={{$json.routeTo}}",
+                    "leftValue": "={{ $json.routeTo }}",
                     "rightValue": "Inbox",
                     "operator": { "type": "string", "operation": "equals" }
                   }
@@ -115,7 +333,7 @@
                 "options": { "caseSensitive": true, "leftValue": "" },
                 "conditions": [
                   {
-                    "leftValue": "={{$json.routeTo}}",
+                    "leftValue": "={{ $json.routeTo }}",
                     "rightValue": "Task",
                     "operator": { "type": "string", "operation": "equals" }
                   }
@@ -128,7 +346,7 @@
                 "options": { "caseSensitive": true, "leftValue": "" },
                 "conditions": [
                   {
-                    "leftValue": "={{$json.routeTo}}",
+                    "leftValue": "={{ $json.routeTo }}",
                     "rightValue": "Resource",
                     "operator": { "type": "string", "operation": "equals" }
                   }
@@ -141,7 +359,7 @@
                 "options": { "caseSensitive": true, "leftValue": "" },
                 "conditions": [
                   {
-                    "leftValue": "={{$json.routeTo}}",
+                    "leftValue": "={{ $json.routeTo }}",
                     "rightValue": "People",
                     "operator": { "type": "string", "operation": "equals" }
                   }
@@ -154,7 +372,7 @@
       "name": "Route by Category",
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3,
-      "position": [1300, 300]
+      "position": [3500, 300]
     },
     {
       "parameters": {
@@ -163,37 +381,20 @@
         "databaseId": "={{ $env.NOTION_DB_INBOX }}",
         "propertiesUi": {
           "propertyValues": [
-            {
-              "key": "Title",
-              "title": "={{$json.title}}"
-            },
-            {
-              "key": "Summary",
-              "richText": "={{$json.summary}}"
-            },
-            {
-              "key": "Category",
-              "selectValue": "={{$json.category}}"
-            },
-            {
-              "key": "Confidence",
-              "number": "={{$json.confidence_score}}"
-            },
-            {
-              "key": "Source",
-              "richText": "Slack #brain-dump"
-            },
-            {
-              "key": "Original",
-              "richText": "={{$json.originalMessage}}"
-            }
+            { "key": "Title", "title": "={{ $json.title }}" },
+            { "key": "Summary", "richText": "={{ $json.summary }}" },
+            { "key": "Category", "selectValue": "={{ $json.category }}" },
+            { "key": "Confidence", "number": "={{ $json.confidence_score }}" },
+            { "key": "Source", "richText": "Slack #brain-dump" },
+            { "key": "Original", "richText": "={{ $json.originalMessage }}" },
+            { "key": "Hash", "richText": "={{ $json.messageHash }}" }
           ]
         }
       },
       "name": "Create Inbox Item",
       "type": "n8n-nodes-base.notion",
       "typeVersion": 2,
-      "position": [1500, 100],
+      "position": [3700, 100],
       "credentials": {
         "notionApi": {
           "id": "YOUR_NOTION_CREDENTIAL_ID",
@@ -208,41 +409,21 @@
         "databaseId": "={{ $env.NOTION_DB_TASKS }}",
         "propertiesUi": {
           "propertyValues": [
-            {
-              "key": "Title",
-              "title": "={{$json.title}}"
-            },
-            {
-              "key": "Summary",
-              "richText": "={{$json.summary}}"
-            },
-            {
-              "key": "Status",
-              "selectValue": "To Do"
-            },
-            {
-              "key": "Category",
-              "selectValue": "={{$json.category}}"
-            },
-            {
-              "key": "Action Items",
-              "richText": "={{$json.action_items ? $json.action_items.join('\\n• ') : ''}}"
-            },
-            {
-              "key": "People",
-              "multiSelectValue": "={{$json.people_mentioned || []}}"
-            },
-            {
-              "key": "Confidence",
-              "number": "={{$json.confidence_score}}"
-            }
+            { "key": "Title", "title": "={{ $json.title }}" },
+            { "key": "Summary", "richText": "={{ $json.summary }}" },
+            { "key": "Status", "selectValue": "To Do" },
+            { "key": "Category", "selectValue": "={{ $json.category }}" },
+            { "key": "Action Items", "richText": "={{ $json.action_items ? '• ' + $json.action_items.join('\\n• ') : '' }}" },
+            { "key": "People", "multiSelectValue": "={{ $json.people_mentioned || [] }}" },
+            { "key": "Confidence", "number": "={{ $json.confidence_score }}" },
+            { "key": "Hash", "richText": "={{ $json.messageHash }}" }
           ]
         }
       },
       "name": "Create Task",
       "type": "n8n-nodes-base.notion",
       "typeVersion": 2,
-      "position": [1500, 250],
+      "position": [3700, 250],
       "credentials": {
         "notionApi": {
           "id": "YOUR_NOTION_CREDENTIAL_ID",
@@ -257,29 +438,18 @@
         "databaseId": "={{ $env.NOTION_DB_RESOURCES }}",
         "propertiesUi": {
           "propertyValues": [
-            {
-              "key": "Title",
-              "title": "={{$json.title}}"
-            },
-            {
-              "key": "Summary",
-              "richText": "={{$json.summary}}"
-            },
-            {
-              "key": "Category",
-              "selectValue": "={{$json.subcategory || 'Ideas'}}"
-            },
-            {
-              "key": "Confidence",
-              "number": "={{$json.confidence_score}}"
-            }
+            { "key": "Title", "title": "={{ $json.title }}" },
+            { "key": "Summary", "richText": "={{ $json.summary }}" },
+            { "key": "Category", "selectValue": "={{ $json.subcategory || 'Ideas' }}" },
+            { "key": "Confidence", "number": "={{ $json.confidence_score }}" },
+            { "key": "Hash", "richText": "={{ $json.messageHash }}" }
           ]
         }
       },
       "name": "Create Resource",
       "type": "n8n-nodes-base.notion",
       "typeVersion": 2,
-      "position": [1500, 400],
+      "position": [3700, 400],
       "credentials": {
         "notionApi": {
           "id": "YOUR_NOTION_CREDENTIAL_ID",
@@ -294,29 +464,18 @@
         "databaseId": "={{ $env.NOTION_DB_PEOPLE }}",
         "propertiesUi": {
           "propertyValues": [
-            {
-              "key": "Name",
-              "title": "={{$json.people_mentioned && $json.people_mentioned[0] ? $json.people_mentioned[0] : $json.title}}"
-            },
-            {
-              "key": "Notes",
-              "richText": "={{$json.summary}}"
-            },
-            {
-              "key": "Last Contact",
-              "date": "={{new Date().toISOString().split('T')[0]}}"
-            },
-            {
-              "key": "Context",
-              "richText": "={{$json.originalMessage}}"
-            }
+            { "key": "Name", "title": "={{ $json.people_mentioned && $json.people_mentioned[0] ? $json.people_mentioned[0] : $json.title }}" },
+            { "key": "Notes", "richText": "={{ $json.summary }}" },
+            { "key": "Last Contact", "date": "={{ new Date().toISOString().split('T')[0] }}" },
+            { "key": "Context", "richText": "={{ $json.originalMessage }}" },
+            { "key": "Hash", "richText": "={{ $json.messageHash }}" }
           ]
         }
       },
       "name": "Create Person",
       "type": "n8n-nodes-base.notion",
       "typeVersion": 2,
-      "position": [1500, 550],
+      "position": [3700, 550],
       "credentials": {
         "notionApi": {
           "id": "YOUR_NOTION_CREDENTIAL_ID",
@@ -326,25 +485,63 @@
     },
     {
       "parameters": {
-        "jsCode": "// Prepare receipt message\nconst data = $input.first().json;\nconst pageUrl = data.url || `https://notion.so/${data.id?.replace(/-/g, '')}`;\n\nreturn [{\n  json: {\n    category: $('Parse & Route').first().json.category,\n    routeTo: $('Parse & Route').first().json.routeTo,\n    confidence: $('Parse & Route').first().json.confidence_score,\n    title: $('Parse & Route').first().json.title,\n    pageUrl,\n    channel_id: $('Parse & Route').first().json.channel_id,\n    ts: $('Parse & Route').first().json.ts\n  }\n}];"
+        "jsCode": "// Prepare receipt message with validated URL\nconst data = $input.first().json;\nconst parseRouteData = $('Parse & Route').first().json;\n\n// Construct valid Notion URL\nlet pageUrl;\nif (data.url) {\n  pageUrl = data.url;\n} else if (data.id) {\n  // Remove hyphens and construct URL\n  const cleanId = data.id.replace(/-/g, '');\n  pageUrl = `https://notion.so/${cleanId}`;\n} else {\n  pageUrl = 'https://notion.so';\n}\n\n// Validate URL format\nif (!pageUrl.startsWith('https://notion.so')) {\n  pageUrl = 'https://notion.so';\n}\n\nreturn [{\n  json: {\n    category: parseRouteData.category,\n    routeTo: parseRouteData.routeTo,\n    confidence: parseRouteData.confidence_score,\n    title: parseRouteData.title,\n    pageUrl: pageUrl,\n    pageId: data.id,\n    channel_id: parseRouteData.channel_id,\n    ts: parseRouteData.ts,\n    messageHash: parseRouteData.messageHash\n  }\n}];"
       },
       "name": "Prepare Receipt",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1700, 300]
+      "position": [3900, 300]
     },
     {
       "parameters": {
-        "channel": "={{$json.channel_id}}",
-        "text": "=✅ Filed as *{{$json.routeTo}}* → \"{{$json.title}}\"\n📊 Confidence: {{Math.round($json.confidence * 100)}}%\n🔗 <{{$json.pageUrl}}|View in Notion>",
+        "jsCode": "// Log successful processing to Notion Logs database\nconst data = $input.first().json;\n\nconst logEntry = {\n  timestamp: new Date().toISOString(),\n  messageHash: data.messageHash,\n  category: data.routeTo,\n  confidence: data.confidence,\n  title: data.title,\n  pageId: data.pageId,\n  status: 'success'\n};\n\n// Pass through for next node\nreturn [{ json: { ...data, logEntry: logEntry } }];"
+      },
+      "name": "Log Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4100, 300]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_DB_LOGS }}",
+        "propertiesUi": {
+          "propertyValues": [
+            { "key": "Title", "title": "={{ $json.logEntry.title }}" },
+            { "key": "Timestamp", "richText": "={{ $json.logEntry.timestamp }}" },
+            { "key": "Category", "selectValue": "={{ $json.logEntry.category }}" },
+            { "key": "Confidence", "number": "={{ $json.logEntry.confidence }}" },
+            { "key": "Hash", "richText": "={{ $json.logEntry.messageHash }}" },
+            { "key": "Status", "selectValue": "={{ $json.logEntry.status }}" },
+            { "key": "Page ID", "richText": "={{ $json.logEntry.pageId }}" }
+          ]
+        }
+      },
+      "name": "Write Log",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [4300, 300],
+      "credentials": {
+        "notionApi": {
+          "id": "YOUR_NOTION_CREDENTIAL_ID",
+          "name": "Notion account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "channel": "={{ $json.channel_id }}",
+        "text": "=✅ Filed as *{{ $json.routeTo }}* → \"{{ $json.title }}\"\n📊 Confidence: {{ Math.round($json.confidence * 100) }}%\n🔗 <{{ $json.pageUrl }}|View in Notion>",
         "otherOptions": {
-          "thread_ts": "={{$json.ts}}"
+          "thread_ts": "={{ $json.ts }}"
         }
       },
       "name": "Send Receipt",
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2,
-      "position": [1900, 300],
+      "position": [4500, 300],
       "credentials": {
         "slackApi": {
           "id": "YOUR_SLACK_CREDENTIAL_ID",
@@ -362,7 +559,7 @@
     {
       "parameters": {
         "channel": "={{ $env.SLACK_ERROR_CHANNEL || 'brain-dump-errors' }}",
-        "text": "=❌ *Brain Dump Failed*\n\n*Error*: {{$json.error.message}}\n*Node*: {{$json.execution.lastNodeExecuted}}\n*Original Message*: {{$json.execution.data?.text || 'N/A'}}\n\n_Workflow: {{$json.workflow.name}}_",
+        "text": "=❌ *Brain Dump Failed*\n\n*Error*: {{ $json.error.message }}\n*Node*: {{ $json.execution.lastNodeExecuted }}\n*Original Message*: {{ $json.execution.data?.text || 'N/A' }}\n\n_Workflow: {{ $json.workflow.name }}_",
         "otherOptions": {}
       },
       "name": "Send Error Alert",
@@ -379,34 +576,67 @@
   ],
   "connections": {
     "Slack Webhook": {
-      "main": [
-        [{ "node": "Validate Input", "type": "main", "index": 0 }]
-      ]
+      "main": [[{ "node": "Validate Input", "type": "main", "index": 0 }]]
     },
     "Validate Input": {
+      "main": [[{ "node": "Has Files?", "type": "main", "index": 0 }]]
+    },
+    "Has Files?": {
       "main": [
-        [{ "node": "Get Thread Context", "type": "main", "index": 0 }]
+        [{ "node": "Process Files", "type": "main", "index": 0 }],
+        [{ "node": "No Files Path", "type": "main", "index": 0 }]
+      ]
+    },
+    "Process Files": {
+      "main": [[{ "node": "Download File", "type": "main", "index": 0 }]]
+    },
+    "Download File": {
+      "main": [[{ "node": "Encode for Vision", "type": "main", "index": 0 }]]
+    },
+    "Encode for Vision": {
+      "main": [[{ "node": "Merge Paths", "type": "main", "index": 0 }]]
+    },
+    "No Files Path": {
+      "main": [[{ "node": "Merge Paths", "type": "main", "index": 0 }]]
+    },
+    "Merge Paths": {
+      "main": [[{ "node": "Check Duplicate", "type": "main", "index": 0 }]]
+    },
+    "Check Duplicate": {
+      "main": [[{ "node": "Evaluate Duplicate", "type": "main", "index": 0 }]]
+    },
+    "Evaluate Duplicate": {
+      "main": [[{ "node": "Is Duplicate?", "type": "main", "index": 0 }]]
+    },
+    "Is Duplicate?": {
+      "main": [
+        [{ "node": "Notify Duplicate", "type": "main", "index": 0 }],
+        [{ "node": "Cheap Bouncer (Haiku)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Cheap Bouncer (Haiku)": {
+      "main": [[{ "node": "Evaluate Bouncer", "type": "main", "index": 0 }]]
+    },
+    "Evaluate Bouncer": {
+      "main": [[{ "node": "Worth Saving?", "type": "main", "index": 0 }]]
+    },
+    "Worth Saving?": {
+      "main": [
+        [{ "node": "Get Thread Context", "type": "main", "index": 0 }],
+        [{ "node": "Notify Filtered", "type": "main", "index": 0 }]
       ]
     },
     "Get Thread Context": {
-      "main": [
-        [{ "node": "Format Context", "type": "main", "index": 0 }]
-      ]
+      "main": [[{ "node": "Format Context", "type": "main", "index": 0 }]]
     },
     "Format Context": {
-      "main": [
-        [{ "node": "Claude 3.5 Sonnet", "type": "main", "index": 0 }]
-      ]
+      "main": [[{ "node": "Claude 3.5 Sonnet", "type": "main", "index": 0 }]]
     },
     "Claude 3.5 Sonnet": {
-      "main": [
-        [{ "node": "Parse & Route", "type": "main", "index": 0 }]
-      ]
+      "main": [[{ "node": "Parse & Route", "type": "main", "index": 0 }]]
     },
     "Parse & Route": {
-      "main": [
-        [{ "node": "Route by Category", "type": "main", "index": 0 }]
-      ]
+      "main": [[{ "node": "Route by Category", "type": "main", "index": 0 }]]
     },
     "Route by Category": {
       "main": [
@@ -417,34 +647,28 @@
       ]
     },
     "Create Inbox Item": {
-      "main": [
-        [{ "node": "Prepare Receipt", "type": "main", "index": 0 }]
-      ]
+      "main": [[{ "node": "Prepare Receipt", "type": "main", "index": 0 }]]
     },
     "Create Task": {
-      "main": [
-        [{ "node": "Prepare Receipt", "type": "main", "index": 0 }]
-      ]
+      "main": [[{ "node": "Prepare Receipt", "type": "main", "index": 0 }]]
     },
     "Create Resource": {
-      "main": [
-        [{ "node": "Prepare Receipt", "type": "main", "index": 0 }]
-      ]
+      "main": [[{ "node": "Prepare Receipt", "type": "main", "index": 0 }]]
     },
     "Create Person": {
-      "main": [
-        [{ "node": "Prepare Receipt", "type": "main", "index": 0 }]
-      ]
+      "main": [[{ "node": "Prepare Receipt", "type": "main", "index": 0 }]]
     },
     "Prepare Receipt": {
-      "main": [
-        [{ "node": "Send Receipt", "type": "main", "index": 0 }]
-      ]
+      "main": [[{ "node": "Log Success", "type": "main", "index": 0 }]]
+    },
+    "Log Success": {
+      "main": [[{ "node": "Write Log", "type": "main", "index": 0 }]]
+    },
+    "Write Log": {
+      "main": [[{ "node": "Send Receipt", "type": "main", "index": 0 }]]
     },
     "Error Trigger": {
-      "main": [
-        [{ "node": "Send Error Alert", "type": "main", "index": 0 }]
-      ]
+      "main": [[{ "node": "Send Error Alert", "type": "main", "index": 0 }]]
     }
   },
   "settings": {
