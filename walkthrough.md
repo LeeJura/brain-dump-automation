@@ -8,15 +8,15 @@ You have selected the **Builder Stack** with **Thread Context Awareness**:
 
 ## 📂 Final Documentation
 
-### 1. [Builder Stack Implementation Guide (V2)](file:///Users/lastardalee/.gemini/antigravity/brain/45cb6491-eb83-4f93-b275-808ae2e21059/implementation_guide.md)
+### 1. [Builder Stack Implementation Guide (V2)](./implementation_guide.md)
 *   **New in V2**: The "Context Aware" workflow.
 *   **Key Node**: `Slack > Get Replies` (Fetches the conversation surrounding your brain dump).
 *   **Why**: Enables you to say "Add **that** to the project" and have the AI understand what "**that**" refers to.
 
-### 2. [System Prompts Specification](file:///Users/lastardalee/.gemini/antigravity/brain/45cb6491-eb83-4f93-b275-808ae2e21059/prompts_specification.md)
+### 2. [System Prompts Specification](./prompts_specification.md)
 *   **Standard**: Use the specified JSON schemas for Claude.
 
-### 3. [Design Review (V2 Features)](file:///Users/lastardalee/.gemini/antigravity/brain/45cb6491-eb83-4f93-b275-808ae2e21059/design_review.md)
+### 3. [Design Review (V2 Features)](./design_review.md)
 *   **Read this for**: Understanding why we added the context features (The "Pronoun Problem").
 
 ## 🚀 Launch Checklist

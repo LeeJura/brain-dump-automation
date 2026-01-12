@@ -1,170 +1,192 @@
 {
-    "name": "Second Brain - The Fixer",
-    "nodes": [
-        {
-            "parameters": {
-                "event": "reaction_added",
-                "options": {}
-            },
-            "name": "Reaction Trigger",
-            "type": "n8n-nodes-base.slackTrigger",
-            "typeVersion": 1,
-            "position": [
-                100,
-                300
-            ],
-            "credentials": {
-                "slackApi": {
-                    "id": "YOUR_SLACK_ID_HERE",
-                    "name": "Slack account"
-                }
-            }
-        },
-        {
-            "parameters": {
-                "mode": "expression",
-                "expression": "={{$json.reaction == 'x' || $json.reaction == 'wastebasket' ? 'Delete' : 'Ignore' }}"
-            },
-            "name": "Check Reaction",
-            "type": "n8n-nodes-base.switch",
-            "typeVersion": 1,
-            "position": [
-                300,
-                300
-            ],
-            "output": [
-                "Delete",
-                "Ignore"
-            ]
-        },
-        {
-            "parameters": {
-                "resource": "message",
-                "channelId": "={{$json.item.channel}}",
-                "ts": "={{$json.item.ts}}",
-                "otherOptions": {}
-            },
-            "name": "Get Original Receipt",
-            "type": "n8n-nodes-base.slack",
-            "typeVersion": 1,
-            "position": [
-                500,
-                200
-            ]
-        },
-        {
-            "parameters": {
-                "functionCode": "// Extract Notion URL from text like 'Link: https://notion.so/page-id'\nconst text = items[0].json.text;\nconst match = text.match(/notion\\.so\\/([a-zA-Z0-9-]+)/);\nif (match) {\n  return [{json: {page_id: match[1]} }];\n} else {\n  throw new Error('No Notion Link found in message');\n}"
-            },
-            "name": "Extract Page ID",
-            "type": "n8n-nodes-base.function",
-            "typeVersion": 1,
-            "position": [
-                700,
-                200
-            ]
-        },
-        {
-            "parameters": {
-                "resource": "page",
-                "operation": "update",
-                "pageId": "={{$json.page_id}}",
-                "simple": false,
-                "propertiesUi": {
-                    "propertyRequest": [
-                        {
-                            "key": "archived",
-                            "value": "true"
-                        }
-                    ]
-                }
-            },
-            "name": "Archive Notion Page",
-            "type": "n8n-nodes-base.notion",
-            "typeVersion": 2,
-            "position": [
-                900,
-                200
-            ]
-        },
-        {
-            "parameters": {
-                "channelId": "={{$node['Reaction Trigger'].json.item.channel}}",
-                "text": "🗑️ Deleted item from Notion.",
-                "otherOptions": {
-                    "thread_ts": "={{$node['Reaction Trigger'].json.item.ts}}"
-                }
-            },
-            "name": "Confirm Delete",
-            "type": "n8n-nodes-base.slack",
-            "typeVersion": 1,
-            "position": [
-                1100,
-                200
-            ],
-            "credentials": {
-                "slackApi": {
-                    "id": "YOUR_SLACK_ID_HERE",
-                    "name": "Slack account"
-                }
-            }
+  "name": "Second Brain - The Fixer (V2.2)",
+  "nodes": [
+    {
+      "parameters": {
+        "event": "reaction_added",
+        "options": {}
+      },
+      "name": "Reaction Trigger",
+      "type": "n8n-nodes-base.slackTrigger",
+      "typeVersion": 1,
+      "position": [100, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
         }
-    ],
-    "connections": {
-        "Reaction Trigger": {
-            "main": [
-                [
-                    {
-                        "node": "Check Reaction",
-                        "type": "main",
-                        "index": 0
-                    }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "outputKey": "Delete",
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "" },
+                "conditions": [
+                  {
+                    "leftValue": "={{ ['x', 'wastebasket', 'heavy_multiplication_x', 'negative_squared_cross_mark'].includes($json.reaction) }}",
+                    "rightValue": "true",
+                    "operator": { "type": "boolean", "operation": "true" }
+                  }
                 ]
-            ]
-        },
-        "Check Reaction": {
-            "main": [
-                [
-                    {
-                        "node": "Get Original Receipt",
-                        "type": "main",
-                        "index": 0
-                    }
+              }
+            },
+            {
+              "outputKey": "Ignore",
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "" },
+                "conditions": [
+                  {
+                    "leftValue": "={{ !['x', 'wastebasket', 'heavy_multiplication_x', 'negative_squared_cross_mark'].includes($json.reaction) }}",
+                    "rightValue": "true",
+                    "operator": { "type": "boolean", "operation": "true" }
+                  }
                 ]
-            ]
-        },
-        "Get Original Receipt": {
-            "main": [
-                [
-                    {
-                        "node": "Extract Page ID",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        },
-        "Extract Page ID": {
-            "main": [
-                [
-                    {
-                        "node": "Archive Notion Page",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
-        },
-        "Archive Notion Page": {
-            "main": [
-                [
-                    {
-                        "node": "Confirm Delete",
-                        "type": "main",
-                        "index": 0
-                    }
-                ]
-            ]
+              }
+            }
+          ]
         }
+      },
+      "name": "Check Reaction",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "get",
+        "channelId": { "__rl": true, "mode": "id", "value": "={{$json.item.channel}}" },
+        "ts": "={{$json.item.ts}}",
+        "otherOptions": {}
+      },
+      "name": "Get Original Receipt",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [500, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract Notion page ID from message text\n// Handles multiple Notion URL formats:\n// - https://notion.so/Page-Title-abc123def456\n// - https://notion.so/abc123def456\n// - https://www.notion.so/workspace/Page-abc123def456\n\nconst text = $input.first().json.text || $input.first().json.message?.text || '';\n\n// Match Notion page ID (32 hex chars or UUID format)\n// Pattern handles: notion.so/[optional-path/]Page-Name-<id> or notion.so/<id>\nconst patterns = [\n  /notion\\.so\\/(?:[^\\/]+\\/)?(?:[^\\s]+[-\\/])?([a-f0-9]{32})(?:[?\\s]|$)/i,\n  /notion\\.so\\/(?:[^\\/]+\\/)?([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i,\n  /notion\\.so\\/([a-f0-9]{32})/i\n];\n\nlet pageId = null;\n\nfor (const pattern of patterns) {\n  const match = text.match(pattern);\n  if (match) {\n    pageId = match[1].replace(/-/g, ''); // Remove hyphens for API\n    break;\n  }\n}\n\nif (!pageId) {\n  throw new Error(`No valid Notion page ID found in message: \"${text.substring(0, 100)}...\"`);\n}\n\n// Format as UUID for Notion API\nconst formattedId = pageId.length === 32 \n  ? `${pageId.slice(0,8)}-${pageId.slice(8,12)}-${pageId.slice(12,16)}-${pageId.slice(16,20)}-${pageId.slice(20)}`\n  : pageId;\n\nreturn [{\n  json: {\n    page_id: formattedId,\n    original_text: text,\n    channel: $('Reaction Trigger').first().json.item.channel,\n    ts: $('Reaction Trigger').first().json.item.ts\n  }\n}];"
+      },
+      "name": "Extract Page ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 200]
+    },
+    {
+      "parameters": {
+        "resource": "page",
+        "operation": "archive",
+        "pageId": "={{$json.page_id}}"
+      },
+      "name": "Archive Notion Page",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [900, 200],
+      "credentials": {
+        "notionApi": {
+          "id": "YOUR_NOTION_CREDENTIAL_ID",
+          "name": "Notion account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "={{$json.channel}}",
+        "text": "=🗑️ Item archived in Notion.\n_React with ❌ was successful._",
+        "otherOptions": {
+          "thread_ts": "={{$('Extract Page ID').first().json.ts}}"
+        }
+      },
+      "name": "Confirm Delete",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [1100, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log ignored reactions (optional: could notify user)\nconst reaction = $('Reaction Trigger').first().json.reaction;\nconst validReactions = ['x', 'wastebasket', 'heavy_multiplication_x', 'negative_squared_cross_mark'];\n\n// Just pass through - workflow ends here\nreturn [{\n  json: {\n    status: 'ignored',\n    reaction: reaction,\n    message: `Reaction ':${reaction}:' is not a delete action. Valid reactions: ${validReactions.join(', ')}`\n  }\n}];"
+      },
+      "name": "Log Ignored",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 400]
+    },
+    {
+      "parameters": {},
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [100, 550]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $env.SLACK_ERROR_CHANNEL || 'brain-dump-errors' }}",
+        "text": "=❌ *Fixer Workflow Failed*\n\n*Error*: {{$json.error.message}}\n*Node*: {{$json.execution.lastNodeExecuted}}\n*Reaction*: {{$json.execution.data?.reaction || 'N/A'}}\n\n_Workflow: {{$json.workflow.name}}_",
+        "otherOptions": {}
+      },
+      "name": "Send Error Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [300, 550],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
     }
+  ],
+  "connections": {
+    "Reaction Trigger": {
+      "main": [
+        [{ "node": "Check Reaction", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check Reaction": {
+      "main": [
+        [{ "node": "Get Original Receipt", "type": "main", "index": 0 }],
+        [{ "node": "Log Ignored", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Original Receipt": {
+      "main": [
+        [{ "node": "Extract Page ID", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Page ID": {
+      "main": [
+        [{ "node": "Archive Notion Page", "type": "main", "index": 0 }]
+      ]
+    },
+    "Archive Notion Page": {
+      "main": [
+        [{ "node": "Confirm Delete", "type": "main", "index": 0 }]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [{ "node": "Send Error Alert", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "current"
+  }
 }
