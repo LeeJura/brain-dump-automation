@@ -1,0 +1,170 @@
+{
+    "name": "Second Brain - The Fixer",
+    "nodes": [
+        {
+            "parameters": {
+                "event": "reaction_added",
+                "options": {}
+            },
+            "name": "Reaction Trigger",
+            "type": "n8n-nodes-base.slackTrigger",
+            "typeVersion": 1,
+            "position": [
+                100,
+                300
+            ],
+            "credentials": {
+                "slackApi": {
+                    "id": "YOUR_SLACK_ID_HERE",
+                    "name": "Slack account"
+                }
+            }
+        },
+        {
+            "parameters": {
+                "mode": "expression",
+                "expression": "={{$json.reaction == 'x' || $json.reaction == 'wastebasket' ? 'Delete' : 'Ignore' }}"
+            },
+            "name": "Check Reaction",
+            "type": "n8n-nodes-base.switch",
+            "typeVersion": 1,
+            "position": [
+                300,
+                300
+            ],
+            "output": [
+                "Delete",
+                "Ignore"
+            ]
+        },
+        {
+            "parameters": {
+                "resource": "message",
+                "channelId": "={{$json.item.channel}}",
+                "ts": "={{$json.item.ts}}",
+                "otherOptions": {}
+            },
+            "name": "Get Original Receipt",
+            "type": "n8n-nodes-base.slack",
+            "typeVersion": 1,
+            "position": [
+                500,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "// Extract Notion URL from text like 'Link: https://notion.so/page-id'\nconst text = items[0].json.text;\nconst match = text.match(/notion\\.so\\/([a-zA-Z0-9-]+)/);\nif (match) {\n  return [{json: {page_id: match[1]} }];\n} else {\n  throw new Error('No Notion Link found in message');\n}"
+            },
+            "name": "Extract Page ID",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                700,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "resource": "page",
+                "operation": "update",
+                "pageId": "={{$json.page_id}}",
+                "simple": false,
+                "propertiesUi": {
+                    "propertyRequest": [
+                        {
+                            "key": "archived",
+                            "value": "true"
+                        }
+                    ]
+                }
+            },
+            "name": "Archive Notion Page",
+            "type": "n8n-nodes-base.notion",
+            "typeVersion": 2,
+            "position": [
+                900,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "channelId": "={{$node['Reaction Trigger'].json.item.channel}}",
+                "text": "🗑️ Deleted item from Notion.",
+                "otherOptions": {
+                    "thread_ts": "={{$node['Reaction Trigger'].json.item.ts}}"
+                }
+            },
+            "name": "Confirm Delete",
+            "type": "n8n-nodes-base.slack",
+            "typeVersion": 1,
+            "position": [
+                1100,
+                200
+            ],
+            "credentials": {
+                "slackApi": {
+                    "id": "YOUR_SLACK_ID_HERE",
+                    "name": "Slack account"
+                }
+            }
+        }
+    ],
+    "connections": {
+        "Reaction Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Check Reaction",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Check Reaction": {
+            "main": [
+                [
+                    {
+                        "node": "Get Original Receipt",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Get Original Receipt": {
+            "main": [
+                [
+                    {
+                        "node": "Extract Page ID",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Extract Page ID": {
+            "main": [
+                [
+                    {
+                        "node": "Archive Notion Page",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Archive Notion Page": {
+            "main": [
+                [
+                    {
+                        "node": "Confirm Delete",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    }
+}

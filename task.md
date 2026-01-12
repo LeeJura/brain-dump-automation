@@ -1,0 +1,31 @@
+# Task: Analyze YouTube Video and Outline Implementation Steps
+
+- [x] Analyze video content <!-- id: 0 -->
+    - [x] Retrieve video title and description <!-- id: 1 -->
+    - [x] Extract key suggestions/points from the video <!-- id: 2 -->
+- [x] Create implementation outline <!-- id: 3 -->
+    - [x] Draft step-by-step implementation guide based on suggestions <!-- id: 4 -->
+    - [x] Review and finalize outline <!-- id: 5 -->
+- [x] Define System Prompts <!-- id: 6 -->
+    - [x] Design "The Sorter" prompt (Classification & Extraction) <!-- id: 7 -->
+    - [x] Design "The Digest" prompt (Review) <!-- id: 8 -->
+    - [x] Design "The Fixer" prompt (Corrections) <!-- id: 9 -->
+- [x] Refine Tech Stack <!-- id: 10 -->
+    - [x] Analyze alternatives for Capture, Storage, Automation, and AI <!-- id: 11 -->
+    - [x] Create Tech Stack Comparison artifact <!-- id: 12 -->
+    - [x] Update Implementation Guide with selected stack (optional) <!-- id: 13 -->
+- [x] Finalize Custom Stack (Builder + n8n + Storage Decision) <!-- id: 14 -->
+    - [x] Evaluate Firebase vs Notion for Storage <!-- id: 15 -->
+    - [x] Update documentation with n8n workflow specifics <!-- id: 16 -->
+- [x] Review & Optimize Design <!-- id: 17 -->
+    - [x] Conduct critical gap analysis (Error handling, Context, Media) <!-- id: 18 -->
+    - [x] Create Design Review artifact <!-- id: 19 -->
+- [x] Implement V2 Improvements <!-- id: 20 -->
+    - [x] Update Implementation Guide with Thread Context (fetch history) <!-- id: 21 -->
+    - [x] Update Walkthrough to reflect V2 design <!-- id: 22 -->
+- [x] Generate n8n Workflow JSON <!-- id: 23 -->
+    - [x] Create importable JSON file for "Second Brain V2" workflow <!-- id: 24 -->
+- [x] Implement Digest Workflow <!-- id: 25 -->
+    - [x] Create n8n_digest_workflow.json (Scheduled trigger) <!-- id: 26 -->
+    - [x] Update Implementation Guide with Digest setup instructions <!-- id: 27 -->
+    - [x] Sync new files to project folder <!-- id: 28 -->

@@ -1,0 +1,9 @@
+# IDE/Tool metadata
+*.metadata.json
+
+# macOS
+.DS_Store
+
+# Environment variables (if added later)
+.env
+.env.local

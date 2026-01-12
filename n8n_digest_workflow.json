@@ -1,0 +1,357 @@
+{
+    "name": "Second Brain - Digest & Weekly Review",
+    "nodes": [
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "hours",
+                            "triggerAtHour": 8
+                        }
+                    ]
+                }
+            },
+            "name": "Schedule (Daily 8am)",
+            "type": "n8n-nodes-base.schedule",
+            "typeVersion": 1,
+            "position": [
+                100,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "mode": "expression",
+                "expression": "={{ $today.weekday == 7 ? 'Sunday' : 'Weekday' }}"
+            },
+            "name": "Check Day",
+            "type": "n8n-nodes-base.switch",
+            "typeVersion": 1,
+            "position": [
+                300,
+                300
+            ],
+            "output": [
+                "Sunday",
+                "Weekday"
+            ]
+        },
+        {
+            "parameters": {
+                "resource": "databasePage",
+                "operation": "getAll",
+                "databaseId": "DB_TASKS_ID",
+                "filterType": "manual",
+                "matchType": "all",
+                "filters": {
+                    "conditions": [
+                        {
+                            "key": "created_time",
+                            "condition": "on_or_after",
+                            "value": "={{$today.minus({days: 1}).format('yyyy-MM-dd')}}"
+                        }
+                    ]
+                }
+            },
+            "name": "Fetch Tasks (Yesterday)",
+            "type": "n8n-nodes-base.notion",
+            "typeVersion": 2,
+            "position": [
+                500,
+                100
+            ]
+        },
+        {
+            "parameters": {
+                "resource": "databasePage",
+                "operation": "getAll",
+                "databaseId": "DB_INBOX_ID",
+                "filterType": "manual",
+                "filters": {
+                    "conditions": [
+                        {
+                            "key": "created_time",
+                            "condition": "on_or_after",
+                            "value": "={{$today.minus({days: 1}).format('yyyy-MM-dd')}}"
+                        }
+                    ]
+                }
+            },
+            "name": "Fetch Inbox (Yesterday)",
+            "type": "n8n-nodes-base.notion",
+            "typeVersion": 2,
+            "position": [
+                500,
+                250
+            ]
+        },
+        {
+            "parameters": {
+                "resource": "databasePage",
+                "operation": "getAll",
+                "databaseId": "DB_PEOPLE_ID",
+                "filterType": "manual",
+                "filters": {
+                    "conditions": [
+                        {
+                            "key": "created_time",
+                            "condition": "on_or_after",
+                            "value": "={{$today.minus({days: 7}).format('yyyy-MM-dd')}}"
+                        }
+                    ]
+                }
+            },
+            "name": "Fetch People (Last 7 Days)",
+            "type": "n8n-nodes-base.notion",
+            "typeVersion": 2,
+            "position": [
+                500,
+                450
+            ]
+        },
+        {
+            "parameters": {
+                "resource": "databasePage",
+                "operation": "getAll",
+                "databaseId": "DB_RESOURCES_ID",
+                "filterType": "manual",
+                "filters": {
+                    "conditions": [
+                        {
+                            "key": "created_time",
+                            "condition": "on_or_after",
+                            "value": "={{$today.minus({days: 7}).format('yyyy-MM-dd')}}"
+                        }
+                    ]
+                }
+            },
+            "name": "Fetch Ideas (Last 7 Days)",
+            "type": "n8n-nodes-base.notion",
+            "typeVersion": 2,
+            "position": [
+                500,
+                600
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "https://api.anthropic.com/v1/messages",
+                "authentication": "header",
+                "headerParametersUi": {
+                    "parameter": [
+                        {
+                            "name": "anthropic-version",
+                            "value": "2023-06-01"
+                        },
+                        {
+                            "name": "x-api-key",
+                            "value": "YOUR_CLAUDE_KEY_HERE"
+                        }
+                    ]
+                },
+                "bodyParametersUi": {
+                    "parameter": [
+                        {
+                            "name": "model",
+                            "value": "claude-3-5-sonnet-20240620"
+                        },
+                        {
+                            "name": "max_tokens",
+                            "value": "1000"
+                        },
+                        {
+                            "name": "messages",
+                            "value": "=[{\"role\": \"user\", \"content\": \"Here are the items created yesterday:\\nTASKS:\\n{{$node['Fetch Tasks (Yesterday)'].json}}\\n\\nINBOX:\\n{{$node['Fetch Inbox (Yesterday)'].json}}\"}]"
+                        },
+                        {
+                            "name": "system",
+                            "value": "You are an Executive Assistant. Summarize these inputs into a 'Daily Digest' using the format defined in the Prompts Specification."
+                        }
+                    ]
+                }
+            },
+            "name": "Generate Daily Briefing",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                800,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "https://api.anthropic.com/v1/messages",
+                "authentication": "header",
+                "headerParametersUi": {
+                    "parameter": [
+                        {
+                            "name": "anthropic-version",
+                            "value": "2023-06-01"
+                        },
+                        {
+                            "name": "x-api-key",
+                            "value": "YOUR_CLAUDE_KEY_HERE"
+                        }
+                    ]
+                },
+                "bodyParametersUi": {
+                    "parameter": [
+                        {
+                            "name": "model",
+                            "value": "claude-3-5-sonnet-20240620"
+                        },
+                        {
+                            "name": "max_tokens",
+                            "value": "1000"
+                        },
+                        {
+                            "name": "messages",
+                            "value": "=[{\"role\": \"user\", \"content\": \"Here are the items from the last 7 DAYS:\\nPEOPLE MET:\\n{{$node['Fetch People (Last 7 Days)'].json}}\\n\\nIDEAS LOGGED:\\n{{$node['Fetch Ideas (Last 7 Days)'].json}}\"}]"
+                        },
+                        {
+                            "name": "system",
+                            "value": "You are a Structural Partner. Perform a 'Weekly Strategic Review' focusing on connections and patterns."
+                        }
+                    ]
+                }
+            },
+            "name": "Generate Weekly Review",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                800,
+                500
+            ]
+        },
+        {
+            "parameters": {
+                "channelId": "YOUR_CHANNEL_ID",
+                "text": "={{$json.content[0].text}}",
+                "otherOptions": {}
+            },
+            "name": "Slack (Post Summary)",
+            "type": "n8n-nodes-base.slack",
+            "typeVersion": 1,
+            "position": [
+                1100,
+                350
+            ],
+            "credentials": {
+                "slackApi": {
+                    "id": "YOUR_SLACK_ID_HERE",
+                    "name": "Slack account"
+                }
+            }
+        }
+    ],
+    "connections": {
+        "Schedule (Daily 8am)": {
+            "main": [
+                [
+                    {
+                        "node": "Check Day",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Check Day": {
+            "main": [
+                [
+                    {
+                        "node": "Fetch People (Last 7 Days)",
+                        "type": "main",
+                        "index": 0
+                    },
+                    {
+                        "node": "Fetch Ideas (Last 7 Days)",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Fetch Tasks (Yesterday)",
+                        "type": "main",
+                        "index": 0
+                    },
+                    {
+                        "node": "Fetch Inbox (Yesterday)",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Fetch Tasks (Yesterday)": {
+            "main": [
+                [
+                    {
+                        "node": "Generate Daily Briefing",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Fetch Inbox (Yesterday)": {
+            "main": [
+                [
+                    {
+                        "node": "Generate Daily Briefing",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Fetch People (Last 7 Days)": {
+            "main": [
+                [
+                    {
+                        "node": "Generate Weekly Review",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Fetch Ideas (Last 7 Days)": {
+            "main": [
+                [
+                    {
+                        "node": "Generate Weekly Review",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Generate Daily Briefing": {
+            "main": [
+                [
+                    {
+                        "node": "Slack (Post Summary)",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Generate Weekly Review": {
+            "main": [
+                [
+                    {
+                        "node": "Slack (Post Summary)",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    }
+}

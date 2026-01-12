@@ -1,0 +1,293 @@
+{
+  "name": "Second Brain V2.1 (Context & Fixer Ready)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "brain-dump",
+        "options": {}
+      },
+      "name": "Slack Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "getReplies",
+        "channelId": "={{$json.channel_id}}",
+        "ts": "={{$json.thread_ts || $json.ts}}",
+        "limit": 3
+      },
+      "name": "Get Thread Context",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [
+        300,
+        300
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_ID_HERE",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "header",
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "x-api-key",
+              "value": "YOUR_CLAUDE_KEY_HERE"
+            }
+          ]
+        },
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "model",
+              "value": "claude-3-5-sonnet-20240620"
+            },
+            {
+              "name": "max_tokens",
+              "value": "1000"
+            },
+            {
+              "name": "messages",
+              "value": "=[{\"role\": \"user\", \"content\": \"Context History:\\n{{$node['Get Thread Context'].json['messages']}}\\n\\nTarget Message:\\n{{$node['Slack Webhook'].json['text']}}\"}]"
+            },
+            {
+              "name": "system",
+              "value": "You are an expert Personal Knowledge Management assistant. Return ONLY JSON."
+            }
+          ]
+        }
+      },
+      "name": "Claude 3.5 Sonnet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "expression": "={{ JSON.parse($json.content[0].text).category }}"
+      },
+      "name": "Category Switch",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        700,
+        300
+      ],
+      "output": [
+        "Inbox",
+        "Project",
+        "Resource",
+        "People"
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": "DB_INBOX_ID"
+      },
+      "name": "Create Inbox Item",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [
+        900,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": "DB_TASKS_ID"
+      },
+      "name": "Create Task",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [
+        900,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": "DB_RESOURCES_ID"
+      },
+      "name": "Create Resource",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [
+        900,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": "DB_PEOPLE_ID"
+      },
+      "name": "Create Person",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [
+        900,
+        550
+      ]
+    },
+    {
+      "parameters": {
+        "channelId": "YOUR_CHANNEL_ID",
+        "text": "=✅ Filed as *{{$json.category}}* in Notion.\nLink: {{$json.url}}",
+        "otherOptions": {}
+      },
+      "name": "Slack (Send Receipt)",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        300
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_ID_HERE",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Slack Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Thread Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Thread Context": {
+      "main": [
+        [
+          {
+            "node": "Claude 3.5 Sonnet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude 3.5 Sonnet": {
+      "main": [
+        [
+          {
+            "node": "Category Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Category Switch": {
+      "main": [
+        [
+          {
+            "node": "Create Inbox Item",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Task",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Resource",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Person",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Inbox Item": {
+      "main": [
+        [
+          {
+            "node": "Slack (Send Receipt)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Task": {
+      "main": [
+        [
+          {
+            "node": "Slack (Send Receipt)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Resource": {
+      "main": [
+        [
+          {
+            "node": "Slack (Send Receipt)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Person": {
+      "main": [
+        [
+          {
+            "node": "Slack (Send Receipt)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
