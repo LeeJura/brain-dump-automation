@@ -4,7 +4,12 @@
       "Bash(gh auth status:*)",
       "Bash(git --version:*)",
       "Bash(brew install:*)",
-      "Bash(gh auth login:*)"
+      "Bash(gh auth login:*)",
+      "Bash(gh repo create:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(gh auth:*)"
     ]
   }
 }
